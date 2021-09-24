@@ -25,6 +25,14 @@ type SyntheticTestManager interface {
 	CreateSyntheticTests(rawJobResults testgridanalysisapi.RawData) []string
 }
 
+type MissingOverallError struct {
+	jobName string
+}
+
+func (m MissingOverallError) Error() string {
+	return fmt.Sprintf("missing Overall test in job %s", m.jobName)
+}
+
 type ProcessingOptions struct {
 	SyntheticTestManager SyntheticTestManager
 	StartDay             int
@@ -32,22 +40,43 @@ type ProcessingOptions struct {
 }
 
 // ProcessTestGridDataIntoRawJobResults returns the raw data and a list of warnings encountered processing the data.
-func (o ProcessingOptions) ProcessTestGridDataIntoRawJobResults(testGridJobInfo []testgridv1.JobDetails) (testgridanalysisapi.RawData, []string) {
+// returns the raw data and a list of warnings encountered processing the data.
+func (o ProcessingOptions) ProcessTestGridDataIntoRawJobResults(testGridJobInfo []testgridv1.JobDetails) (testgridanalysisapi.RawData, []string, []error) {
 	rawJobResults := testgridanalysisapi.RawData{JobResults: map[string]testgridanalysisapi.RawJobResult{}}
+
+	errs := []error{}
 
 	for _, jobDetails := range testGridJobInfo {
 		klog.V(2).Infof("processing test details for job %s\n", jobDetails.Name)
 		startCol, endCol := computeLookback(o.StartDay, o.NumDays, jobDetails.Timestamps)
-		processJobDetails(rawJobResults, jobDetails, startCol, endCol)
+		if err := processJobDetails(rawJobResults, jobDetails, startCol, endCol); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	// now that we have all the JobRunResults, use them to create synthetic tests for install, upgrade, and infra
 	warnings := o.SyntheticTestManager.CreateSyntheticTests(rawJobResults)
 
-	return rawJobResults, warnings
+	return rawJobResults, warnings, errs
 }
 
-func processJobDetails(rawJobResults testgridanalysisapi.RawData, job testgridv1.JobDetails, startCol, endCol int) {
+func hasOverallTest(job testgridv1.JobDetails) bool {
+	for _, test := range job.Tests {
+		if test.Name == overall {
+			return true
+		}
+	}
+
+	return false
+}
+
+func processJobDetails(rawJobResults testgridanalysisapi.RawData, job testgridv1.JobDetails, startCol, endCol int) error {
+	// Do a first pass to make sure the job has an "Overall" test
+	// If not, return early so we don't taint the rest of the results
+	if !hasOverallTest(job) {
+		return MissingOverallError{job.Name}
+	}
+
 	for i, test := range job.Tests {
 		klog.V(4).Infof("Analyzing results from %d to %d from job %s for test %s\n", startCol, endCol, job.Name, test.Name)
 		for _, prefix := range testSuitePrefixes {
@@ -56,6 +85,8 @@ func processJobDetails(rawJobResults testgridanalysisapi.RawData, job testgridv1
 		job.Tests[i] = test
 		processTest(rawJobResults, job, test, startCol, endCol)
 	}
+
+	return nil
 }
 
 func computeLookback(startDay, numDays int, timestamps []int) (int, int) {
@@ -76,10 +107,10 @@ func computeLookback(startDay, numDays int, timestamps []int) (int, int) {
 	klog.V(2).Infof("starttime: %d\nendtime: %d\n", startTs, stopTs)
 	start := math.MaxInt32 // start is an int64 so leave overhead for wrapping to negative in case this gets incremented(it does).
 	for i, t := range timestamps {
-		if int64(t) < startTs && i < start {
+		if int64(t) <= startTs && i < start {
 			start = i
 		}
-		if int64(t) < stopTs {
+		if int64(t) <= stopTs {
 			return start, i
 		}
 	}
@@ -97,7 +128,11 @@ var testSuitePrefixes = []string{
 }
 
 // ignoreTestRegex is used to strip o ut tests that don't have predictive or diagnostic value.  We don't want to show these in our data.
-var ignoreTestRegex = regexp.MustCompile(`Run multi-stage test|operator.Import the release payload|operator.Import a release payload|operator.Run template|operator.Build image|Monitor cluster while tests execute|Overall|job.initialize|\[sig-arch\]\[Feature:ClusterUpgrade\] Cluster should remain functional during upgrade`)
+var ignoreTestRegex = regexp.MustCompile(`operator.Import the release payload|operator.Import a release payload|operator.Run template|operator.Build image|Monitor cluster while tests execute|Overall|job.initialize|\[sig-arch\]\[Feature:ClusterUpgrade\] Cluster should remain functional during upgrade`)
+
+func IsIgnoredTest(testName string) bool {
+	return ignoreTestRegex.MatchString(testName) || testidentification.IsMultistageJobName(testName)
+}
 
 // processTestToJobRunResults adds the tests to the provided jobresult to the provided JobResult and returns the passed, failed, flaked for the test
 //nolint:gocyclo // TODO: Break this function up, see: https://github.com/fzipp/gocyclo
@@ -165,7 +200,10 @@ func processTestToJobRunResults(jobResult testgridanalysisapi.RawJobResult, job 
 					if jrr.OpenShiftTestsStatus == "" {
 						jrr.OpenShiftTestsStatus = testgridanalysisapi.Success
 					}
+				case testidentification.IsStepRegistryItem(test.Name):
+					jrr.StepRegistryItemStates = addStepRegistryItemState(jrr.StepRegistryItemStates, test.Name, testgridanalysisapi.Success)
 				}
+
 				jobResult.JobRunResults[joburl] = jrr
 			}
 		case testgridv1.TestStatusFailure:
@@ -205,6 +243,8 @@ func processTestToJobRunResults(jobResult testgridanalysisapi.RawJobResult, job 
 					jrr.UpgradeForMachineConfigPoolsStatus = testgridanalysisapi.Failure
 				case testidentification.IsOpenShiftTest(test.Name):
 					jrr.OpenShiftTestsStatus = testgridanalysisapi.Failure
+				case testidentification.IsStepRegistryItem(test.Name):
+					jrr.StepRegistryItemStates = addStepRegistryItemState(jrr.StepRegistryItemStates, test.Name, testgridanalysisapi.Failure)
 				}
 				jobResult.JobRunResults[joburl] = jrr
 			}
@@ -227,9 +267,30 @@ func processTestToJobRunResults(jobResult testgridanalysisapi.RawJobResult, job 
 		testName = testgridanalysisapi.OperatorFinalHealthPrefix + " " + operatorName
 	}
 
-	addTestResult(jobResult.TestResults, &job, testName, passed, failed, flaked)
+	// Since we took out the filter for tests matching multistage jobs so we can
+	// process them, we still want them to be filtered, so we check before adding
+	// the results.
+	if !testidentification.IsStepRegistryItem(testName) && !testidentification.IsMultistageJobName(testName) {
+		addTestResult(jobResult.TestResults, &job, testName, passed, failed, flaked)
+	}
 
 	return
+}
+
+func addStepRegistryItemState(stepRegistryItemStates testgridanalysisapi.StepRegistryItemStates, testName, state string) testgridanalysisapi.StepRegistryItemStates {
+	stepItem := testidentification.GetStepRegistryItemFromTest(testName)
+
+	if stepRegistryItemStates.MultistageName == "" {
+		stepRegistryItemStates.MultistageName = stepItem.MultistageJobName
+	}
+
+	stepRegistryItemStates.States = append(stepRegistryItemStates.States, testgridanalysisapi.StageState{
+		Name:             stepItem.StepName,
+		State:            state,
+		OriginalTestName: testName,
+	})
+
+	return stepRegistryItemStates
 }
 
 func processTest(rawJobResults testgridanalysisapi.RawData, job testgridv1.JobDetails, test testgridv1.Test, startCol, endCol int) {
@@ -237,7 +298,7 @@ func processTest(rawJobResults testgridanalysisapi.RawData, job testgridv1.JobDe
 	// we have to know about overall to be able to set the global success or failure.
 	// we have to know about container setup to be able to set infra failures
 	// TODO stop doing this so we can avoid any filtering. We can filter when preparing to create the data for display
-	if test.Name != overall && !testidentification.IsSetupContainerEquivalent(test.Name) && ignoreTestRegex.MatchString(test.Name) {
+	if test.Name != overall && !testidentification.IsSetupContainerEquivalent(test.Name) && IsIgnoredTest(test.Name) {
 		return
 	}
 

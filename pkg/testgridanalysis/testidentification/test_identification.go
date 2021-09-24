@@ -86,6 +86,8 @@ var curatedTestSubstrings = map[string][]string{
 }
 
 var (
+	ciMultistageRegex           = regexp.MustCompile(`operator\.Run multi-stage test (\S+)$`)
+	ciStepRegex                 = regexp.MustCompile(`operator\.Run multi-stage test (\S+) \- (\S+) container test$`)
 	cvoAcknowledgesUpgradeRegex = regexp.MustCompile(`^(Cluster upgrade\.)?\[sig-cluster-lifecycle\] Cluster version operator acknowledges upgrade$`)
 	operatorsUpgradedRegex      = regexp.MustCompile(`^(Cluster upgrade\.)?\[sig-cluster-lifecycle\] Cluster completes upgrade$`)
 	machineConfigsUpgradedRegex = regexp.MustCompile(`^(Cluster upgrade\.)?\[sig-mco\] Machine config pools complete upgrade$`)
@@ -212,4 +214,29 @@ func IsInstallRelatedTest(testName string) bool {
 	}
 
 	return false
+}
+
+func IsMultistageJobName(testName string) bool {
+	return ciMultistageRegex.MatchString(testName)
+}
+
+func IsStepRegistryItem(testName string) bool {
+	return ciStepRegex.MatchString(testName)
+}
+
+type StepRegistryItem struct {
+	MultistageJobName string
+	StepName          string
+}
+
+func GetStepRegistryItemFromTest(testName string) StepRegistryItem {
+	matches := ciStepRegex.FindAllStringSubmatch(testName, -1)
+	if len(matches) == 0 {
+		return StepRegistryItem{}
+	}
+
+	return StepRegistryItem{
+		MultistageJobName: matches[0][1],
+		StepName:          strings.ReplaceAll(matches[0][2], matches[0][1]+"-", ""),
+	}
 }

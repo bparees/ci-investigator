@@ -76,6 +76,10 @@ const (
 
 {{ summaryJobsFailuresByBugzillaComponent .Current .Prev .NumDays .Release }}
 
+{{ allMultistageJobs .Current .Prev }}
+
+{{ allSteps .Current .Prev }}
+
 `
 )
 
@@ -401,6 +405,8 @@ func PrintHTMLReport(w http.ResponseWriter, req *http.Request, report, twoDayRep
 			"summaryTopNegativelyMovingJobs":         summaryTopNegativelyMovingJobs,
 			"topLevelIndicators":                     topLevelIndicators,
 			"releasesList":                           releasesList,
+			"allMultistageJobs":                      allMultistageJobs,
+			"allSteps":                               allSteps,
 		},
 	).Parse(dashboardPageHTML))
 

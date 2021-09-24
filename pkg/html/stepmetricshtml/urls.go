@@ -1,0 +1,143 @@
+package stepmetricshtml
+
+import (
+	"net/url"
+	"path/filepath"
+	"regexp"
+
+	"github.com/openshift/sippy/pkg/html/generichtml"
+)
+
+const (
+	StepMetricsUIPath string = "/stepmetrics"
+)
+
+type URLGenerator interface {
+	URL() *url.URL
+	ToHTML() string
+}
+
+type StepRegistryURL struct {
+	Reference string
+	Search    string
+}
+
+var _ URLGenerator = (*StepRegistryURL)(nil)
+
+func (s StepRegistryURL) ToHTML() string {
+	return generichtml.NewHTMLLink("Step Registry", s.URL()).ToHTML()
+}
+
+func (s StepRegistryURL) URL() *url.URL {
+	u := &url.URL{
+		Scheme: "https",
+		Host:   "steps.ci.openshift.org",
+		Path:   s.getPath(),
+	}
+
+	if u.Path == "/search" {
+		values := url.Values{}
+		values.Add("job", s.Search)
+		u.RawQuery = values.Encode()
+	}
+
+	return u
+}
+
+func (s StepRegistryURL) getPath() string {
+	if s.Reference != "" {
+		return filepath.Join("/reference", s.Reference)
+	}
+
+	return "/search"
+}
+
+type SippyURL struct {
+	JobName           string
+	Release           string
+	MultistageJobName string
+	StepName          string
+	Variant           string
+}
+
+var _ URLGenerator = (*SippyURL)(nil)
+
+func (s SippyURL) ToHTML() string {
+	return generichtml.NewHTMLLink("Detail", s.URL()).ToHTML()
+}
+
+func (s SippyURL) URL() *url.URL {
+	values := mapToURLValues(map[string]string{
+		"jobName":           s.JobName,
+		"release":           s.Release,
+		"multistageJobName": s.MultistageJobName,
+		"stepName":          s.StepName,
+		"variant":           s.Variant,
+	})
+
+	return &url.URL{
+		Path:     StepMetricsUIPath,
+		RawQuery: values.Encode(),
+	}
+}
+
+var _ URLGenerator = (*CISearchURL)(nil)
+
+type CISearchURL struct {
+	Release     string
+	Search      string
+	SearchRegex string
+	JobRegex    string
+}
+
+func (c CISearchURL) ToHTML() string {
+	return generichtml.NewHTMLLink("CI Search", c.URL()).ToHTML()
+}
+
+func (c CISearchURL) search() string {
+	if c.Search != "" {
+		return regexp.QuoteMeta(c.Search)
+	}
+
+	return c.SearchRegex
+}
+
+func (c CISearchURL) name() string {
+	if c.Release != "" {
+		return c.Release
+	}
+
+	return c.JobRegex
+}
+
+func (c CISearchURL) URL() *url.URL {
+	values := mapToURLValues(map[string]string{
+		"maxAge":     "168h",
+		"context":    "1",
+		"type":       `bug+junit`,
+		"name":       c.name(),
+		"maxMatches": "5",
+		"maxBytes":   "20971520",
+		"groupBy":    "job",
+		"search":     c.search(),
+	})
+
+	return &url.URL{
+		Scheme:   "https",
+		Host:     "search.ci.openshift.org",
+		Path:     "/",
+		RawQuery: values.Encode(),
+	}
+}
+
+func mapToURLValues(inMap map[string]string) url.Values {
+	values := url.Values{}
+
+	for k, v := range inMap {
+		if v != "" {
+			values.Add(k, v)
+		}
+	}
+
+	return values
+}

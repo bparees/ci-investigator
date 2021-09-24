@@ -492,6 +492,8 @@ func (s *Server) Serve() {
 	serveMux.HandleFunc("/refresh", s.refresh)
 	serveMux.HandleFunc("/canary", s.printCanaryReport)
 	serveMux.HandleFunc("/variants", s.htmlVariantsReport)
+	serveMux.HandleFunc("/stepmetrics", s.stepMetrics)
+	serveMux.HandleFunc("/api/stepmetrics", s.stepMetricsAPI)
 
 	// Old API
 	serveMux.HandleFunc("/json", s.printJSONReport)

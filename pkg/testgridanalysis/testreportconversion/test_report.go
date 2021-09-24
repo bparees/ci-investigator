@@ -96,7 +96,8 @@ func PrepareTestReport(
 		TopFailingTestsWithoutBug: topFailingTestsWithoutBug,
 		CuratedTests:              curatedTests,
 
-		AnalysisWarnings: analysisWarnings,
+		AnalysisWarnings:            analysisWarnings,
+		TopLevelStepRegistryMetrics: getTopLevelStepRegistryMetrics(allJobResults),
 	}
 
 	return testReport

@@ -74,6 +74,50 @@ type TestReport struct {
 
 	// AnalysisWarnings is a free-form list of warnings to be displayed on sippy test reports
 	AnalysisWarnings []string `json:"analysisWarnings"`
+
+	// Holds metrics for Step Registry results for all jobs found
+	TopLevelStepRegistryMetrics TopLevelStepRegistryMetrics `json:"topLevelStepRegistryMetrics"`
+}
+
+type TopLevelStepRegistryMetrics struct {
+	// Aggregated by the multistage test name ("e2e-aws")
+	ByMultistageName map[string]StepRegistryMetrics `json:"byMultistageTestName"`
+	// Aggregated by the stage name, e.g., "openshift-e2e-test"
+	ByStageName map[string]ByStageName `json:"byStageName"`
+	// Aggregated by the job name
+	ByJobName map[string]ByJobName `json:"byJobName"`
+}
+
+type ByStageName struct {
+	// Aggregated results from the individual results list
+	Aggregated StageResult `json:"aggregated"`
+	// Individual occurrences of the stage results by name
+	// Useful for referring to which specific test name had this result
+	ByMultistageName map[string]StageResult `json:"byMultistageTestName"`
+}
+
+type ByJobName struct {
+	// Results aggregated by job name
+	JobName             string `json:"jobName"`
+	StepRegistryMetrics `json:"stepRegistryMetrics"`
+}
+
+// Holds Step Registry metrics aggregated against a multistage job name (e.g., "e2e-aws")
+type StepRegistryMetrics struct {
+	// Name of the multistage test, e.g., "e2e-aws"
+	MultistageName string `json:"multistageName"`
+	// Contains the metrics for each individual stage in no particular order.
+	StageResults map[string]StageResult `json:"stageResults"`
+	Aggregated   StageResult            `json:"aggregated"`
+}
+
+type StageResult struct {
+	// Wraps TestResult since it has most of the fields we'd want to associate.
+	// Additionally, allows reuse of aggregation and reporting funcs.
+	TestResult
+	// The original test name from TestGrid
+	OriginalTestName string `json:"originalTestName"`
+	Runs             int    `json:"runs"`
 }
 
 // TopLevelIndicators is a curated list of metrics, that describe the overall health of the release independent of
@@ -205,6 +249,8 @@ type JobResult struct {
 	// TestResults holds entries for each test that is a part of this aggregation.  Each entry aggregates the results
 	// of all runs of a single test.  The array is sorted from lowest PassPercentage to highest PassPercentage
 	TestResults []TestResult `json:"results"`
+
+	StepRegistryMetrics StepRegistryMetrics `json:"stepMetrics"`
 }
 
 type SortedBugzillaComponentResult struct {
