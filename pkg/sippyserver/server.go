@@ -1020,7 +1020,7 @@ func (s *Server) jsonJobRunRiskAnalysis(w http.ResponseWriter, req *http.Request
 		job := &models.ProwJob{}
 		res := s.db.DB.Where("name = ?", jobRun.ProwJob.Name).First(job)
 		if res.Error != nil {
-			failureResponse(w, http.StatusBadRequest, fmt.Sprintf("unable to find ProwJob: %s", jobRun.ProwJob.Name))
+			failureResponse(w, http.StatusBadRequest, fmt.Sprintf("unable to find ProwJob '%s': %v", jobRun.ProwJob.Name, res.Error))
 			return
 		}
 		jobRun.ProwJob = *job
